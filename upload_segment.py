@@ -35,8 +35,8 @@ if (__name__ == '__main__'):
     config.read('config.ini', encoding = 'utf-8')
     # CONFIGURATION
     # Replace these with your actual values
-    CONNECTION_STR = config['KEYS']['CONNECTION_STR']
-    CONTAINER_NAME = config['KEYS']['CONTAINER_NAME']
+    CONNECTION_STR = config['KEYS.STORAGE']['CONNECTION_STR']
+    CONTAINER_NAME = config['KEYS.STORAGE']['CONTAINER_NAME']
     VIDEO_PATH = Path(config['PATHS']['VIDEO_PATH'])
 
     upload_video_to_azure(VIDEO_PATH, CONTAINER_NAME, CONNECTION_STR)
