@@ -58,12 +58,12 @@ def download_blob(blob_url: str, local_path: str):
     """Download chunk from Azure Blob Storage"""
     # Extract blob name from URL (format: https://account.blob.core.windows.net/container/blob)
     blob_name = blob_url.split(f"/{BLOB_CONTAINER_CHUNKS}/")[-1]
-    
+
     blob_client = blob_service_client.get_blob_client(
         container=BLOB_CONTAINER_CHUNKS,
         blob=blob_name
     )
-    
+
     with open(local_path, "wb") as f:
         f.write(blob_client.download_blob().readall())
 
@@ -71,16 +71,16 @@ def synthetic_process_chunk(chunk_event: dict) -> list[dict]:
     """Same synthetic CV as before"""
     n = random.randint(SYNTH_VEHICLES_MIN, SYNTH_VEHICLES_MAX)
     summaries = []
-    
+
     for i in range(n):
         track_id = f"t{chunk_event['chunk_index']}_{i}"
         vehicle_type = "car" if random.random() < 0.8 else "truck"
         direction = "inbound" if random.random() < 0.5 else "outbound"
-        
+
         base = random.uniform(60, 120) if vehicle_type == "car" else random.uniform(50, 100)
         max_speed_kmh = base + random.uniform(0, 30)
         avg_speed_kmh = (base + max_speed_kmh) / 2.0
-        
+
         summaries.append({
             "event_type": "vehicle_track_summary",
             "event_id": str(uuid.uuid4()),
@@ -94,7 +94,7 @@ def synthetic_process_chunk(chunk_event: dict) -> list[dict]:
             "avg_speed_kmh": avg_speed_kmh,
             "max_speed_kmh": max_speed_kmh,
         })
-    
+
     return summaries
 
 def send_to_eventhub(producer, events: list[dict]):
@@ -110,32 +110,32 @@ def on_event(partition_context, event):
     try:
         # Parse incoming message
         chunk_event = json.loads(event.body_as_str())
-        
+
         chunks_started_total.labels(worker_id=WORKER_ID).inc()
         chunks_in_progress.labels(worker_id=WORKER_ID).inc()
-        
+
         print(f"[{WORKER_ID}] Processing chunk: {chunk_event['chunk_id']}")
-        
+
         # Download chunk from Blob Storage
         with tempfile.TemporaryDirectory() as tmpdir:
             local_mp4 = os.path.join(tmpdir, "chunk.mp4")
             download_blob(chunk_event["uri"], local_mp4)
-            
+
             # CV processing (timed)
             start_t = time.perf_counter()
             summaries = synthetic_process_chunk(chunk_event)
             elapsed = time.perf_counter() - start_t
-            
+
             cv_chunk_latency_seconds.labels(worker_id=WORKER_ID).observe(elapsed)
-            
+
             # Send results to Event Hubs
             events_batch = []
             alerts_batch = []
-            
+
             for summary in summaries:
                 events_batch.append(json.dumps(summary).encode('utf-8'))
                 vehicle_summaries_emitted_total.labels(worker_id=WORKER_ID).inc()
-                
+
                 # Check for speed alerts
                 if summary["max_speed_kmh"] > SPEED_ALERT_THRESHOLD_KMH:
                     alert = {
@@ -152,18 +152,18 @@ def on_event(partition_context, event):
                     alerts_batch.append(json.dumps(alert).encode('utf-8'))
                     speed_alerts_emitted_total.labels(worker_id=WORKER_ID).inc()
                     print(f"[{WORKER_ID}] 🚨 ALERT: {summary['track_id']} at {summary['max_speed_kmh']:.1f} km/h")
-            
+
             # Send to Event Hubs
             send_to_eventhub(producer_events, events_batch)
             if alerts_batch:
                 send_to_eventhub(producer_alerts, alerts_batch)
-        
+
         # Update checkpoint (like Kafka commit)
         partition_context.update_checkpoint(event)
-        
+
         chunks_completed_total.labels(worker_id=WORKER_ID).inc()
         print(f"[{WORKER_ID}] ✅ Completed chunk: {chunk_event['chunk_id']} ({elapsed:.2f}s)")
-        
+
     except Exception as e:
         chunks_failed_total.labels(worker_id=WORKER_ID, reason=type(e).__name__).inc()
         print(f"[{WORKER_ID}] ❌ ERROR: {e}")
@@ -173,21 +173,21 @@ def on_event(partition_context, event):
 # ========== MAIN ==========
 def main():
     print(f"[{WORKER_ID}] Starting vision worker...")
-    
+
     # Start Prometheus metrics server
     start_http_server(METRICS_PORT)
     print(f"[{WORKER_ID}] Metrics: http://localhost:{METRICS_PORT}/metrics")
-    
+
     # Create Event Hub consumer
     consumer = EventHubConsumerClient.from_connection_string(
         conn_str=EVENTHUB_CONNECTION_STRING,
         consumer_group=EVENTHUB_CONSUMER_GROUP,
         eventhub_name=EVENTHUB_CHUNKS,
     )
-    
+
     print(f"[{WORKER_ID}] Listening to Event Hub: {EVENTHUB_CHUNKS}")
     print(f"[{WORKER_ID}] Consumer group: {EVENTHUB_CONSUMER_GROUP}")
-    
+
     try:
         # Start consuming (blocks forever)
         with consumer:
