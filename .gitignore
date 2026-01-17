@@ -1,3 +1,8 @@
+venv
+data 
+splitter
+video_splitter/out
+
 Include/
 Lib/
 Scripts/ 
