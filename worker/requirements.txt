@@ -1,2 +1,7 @@
+boto3
+botocore
+kafka-python
+python-dotenv
 prometheus-client
-azure-eventhub
+opencv-python-headless
+ultralytics

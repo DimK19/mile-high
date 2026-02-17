@@ -10,12 +10,18 @@ services:
       - "9001:9001"   # Console UI
     volumes:
       - minio_data:/data
+    # 1. ADDED HEALTHCHECK
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  # Create bucket at startup
   minio-mc:
     image: minio/mc:latest
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy # 2. WAIT FOR MINIO TO BE READY
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 minio minio12345 &&
@@ -48,11 +54,18 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    # 3. ADDED HEALTHCHECK
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   kafka-init:
     image: confluentinc/cp-kafka:7.6.1
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy # 4. WAIT FOR KAFKA TO BE READY
     entrypoint: >
       /bin/sh -c "
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic video-chunks --partitions 3 --replication-factor 1 &&
@@ -72,6 +85,12 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+    # 5. ADDED HEALTHCHECK
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic -d traffic"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -94,8 +113,10 @@ services:
     build:
       context: ../worker
     depends_on:
-      - kafka
-      - minio
+      kafka:
+        condition: service_healthy # 6. WAIT FOR KAFKA
+      minio:
+        condition: service_healthy # 7. WAIT FOR MINIO
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
       MINIO_ENDPOINT: http://minio:9000
@@ -108,8 +129,10 @@ services:
     build:
       context: ../analytics
     depends_on:
-      - kafka
-      - postgres
+      kafka:
+        condition: service_healthy # 8. WAIT FOR KAFKA
+      postgres:
+        condition: service_healthy # 9. WAIT FOR POSTGRES
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
       KAFKA_TOPIC_IN: traffic-events

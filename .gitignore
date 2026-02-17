@@ -1,6 +1,6 @@
 venv
 data 
-splitter
+#splitter
 video_splitter/out
 
 Include/
@@ -8,3 +8,6 @@ Lib/
 Scripts/ 
 *.cfg
 *.ini
+yolov8s.pt  
+new_
+yolov8n.pt 
