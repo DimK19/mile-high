@@ -124,6 +124,13 @@ services:
       WORKER_ID: worker-1
     ports:
       - "8000:8000"
+    deploy:
+        resources:
+            reservations:
+              devices:
+                - driver: nvidia
+                  count: 1
+                  capabilities: [gpu]
 
   spark-analytics:
     build:

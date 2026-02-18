@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM ultralytics/ultralytics:latest
 
 WORKDIR /app
 
@@ -11,14 +11,14 @@ RUN apt-get update && apt-get install -y \
 
 COPY requirements.txt .
 
-# 2. Install Python dependencies 
+# 2. Install Python dependencies
 # (Make sure requirements.txt includes: ultralytics, opencv-python-headless)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. Copy the AI Model Weights
 # This bakes the model file into the image so it works offline and starts instantly.
 # (If you switched to the small model, change this to: COPY yolov8s.pt .)
-COPY yolov8n.pt .
+COPY yolov8s.pt .
 
 # 4. Copy the Application Code
 COPY vision_worker.py .

@@ -1,7 +1,7 @@
 import cv2
 
 # PATH TO YOUR VIDEO
-VIDEO_SOURCE = "splitter/out/chunk_001.mp4" 
+VIDEO_SOURCE = "C:\\Users\\KYRIAKOS\\Desktop\\segments\\segment17.mp4" 
 
 def draw_lines(event, x, y, flags, param):
     if event == cv2.EVENT_MOUSEMOVE:
@@ -18,7 +18,7 @@ ret, frame = cap.read()
 if ret:
     cv2.imshow('Find Lines', frame)
     cv2.setMouseCallback('Find Lines', draw_lines)
-    
+
     print("Hover over the road to find Y coordinates.")
     print("Press any key to close.")
     cv2.waitKey(0)

@@ -13,18 +13,18 @@ MOCK_VIDEO_ID = "cam_01_highway"
 MOCK_CHUNK_INDEX = 1
 
 # --- YOUR SPEED GATE CONFIG ---
-LINE_A = 417   # Top line
-LINE_B = 553   # Bottom line
+LINE_A = 282   # Top line
+LINE_B = 370   # Bottom line
 GATE_DISTANCE_METERS = 17.0
 
 # Define a relative path to your video
-VIDEO_SOURCE = "splitter/out/chunk_001.mp4" 
+VIDEO_SOURCE = "C:\\Users\\KYRIAKOS\\Desktop\\segments\\segment17.mp4"
 
 def utc_now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 print("Loading YOLOv8 model...")
-model = YOLO('yolov8s.pt') 
+model = YOLO('yolov8s.pt').to('cuda')
 
 cap = cv2.VideoCapture(VIDEO_SOURCE)
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -50,8 +50,8 @@ print("Press 'q' to stop early and see the JSON report.")
 while cap.isOpened():
     success, frame = cap.read()
     if not success:
-        break 
-    
+        break
+
     # Current timestamp in the video (in seconds)
     current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
@@ -66,16 +66,16 @@ while cap.isOpened():
         boxes = results[0].boxes.xywh.cpu().tolist()
         track_ids = results[0].boxes.id.int().cpu().tolist()
         cls_indices = results[0].boxes.cls.int().cpu().tolist()
-        
+
         for box, track_id, cls_idx in zip(boxes, track_ids, cls_indices):
             class_name = model.names[cls_idx]
-            
+
             # Filter: Only vehicles
             if class_name not in ['car', 'truck', 'bus', 'motorcycle']:
                 continue
 
             x, y, w, h = box
-            
+
             # -----------------------------------------------------
             # 3. SPEED GATE LOGIC (Crossing Detection)
             # -----------------------------------------------------
@@ -107,9 +107,9 @@ while cap.isOpened():
                     if duration > 0.1: # Avoid noise (instantly hitting both?)
                         speed_mps = GATE_DISTANCE_METERS / duration
                         speed_kmh = speed_mps * 3.6
-                        
+
                         # Determine Direction based on which line was hit first
-                        direction = "inbound" if t1 < t2 else "outbound" 
+                        direction = "inbound" if t1 < t2 else "outbound"
                         # (Assuming Top->Bottom is Inbound. Swap if needed)
 
                         # Store/Update Summary
@@ -126,9 +126,9 @@ while cap.isOpened():
                         cv2.rectangle(frame, (int(x-w/2), int(y-h/2)), (int(x+w/2), int(y+h/2)), (0, 255, 0), 2)
                         cv2.putText(frame, label, (int(x-w/2), int(y-h/2)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                        # Clear crossing times so we don't recalculate continuously 
+                        # Clear crossing times so we don't recalculate continuously
                         # (Unless you want to update it? Usually once is enough)
-                        del gate_crossings[track_id] 
+                        del gate_crossings[track_id]
 
             # Update history
             track_last_pos[track_id] = {"y": y, "timestamp": current_time}

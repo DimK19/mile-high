@@ -53,30 +53,37 @@ GATE_DISTANCE_METERS = 17.0
 # ----------------------------
 print(f"[{WORKER_ID}] Loading YOLOv8 model...")
 try:
-    model = YOLO('yolov8n.pt')
+    # Loads the model copied into the Docker image
+    model = YOLO('yolov8s.pt')
     print(f"[{WORKER_ID}] Model loaded successfully.")
 except Exception as e:
     print(f"[{WORKER_ID}] CRITICAL WARNING: Model failed to load: {e}")
-    model = YOLO('yolov8n.pt')
+    # Fallback if file missing
+    exit(1)
 
 
 # ----------------------------
-# Prometheus metrics (UPDATED FOR ASSIGNMENT)
+# Prometheus metrics
 # ----------------------------
 
 chunks_started_total = Counter(
-    "cv_chunks_started_total", "Number of video chunks whose processing has started", ["worker_id"]
+    "cv_chunks_started_total",
+    "Number of video chunks whose processing has started",
+    ["worker_id"],
 )
 
 chunks_completed_total = Counter(
-    "cv_chunks_completed_total", "Number of video chunks successfully processed end-to-end", ["worker_id"]
+    "cv_chunks_completed_total",
+    "Number of video chunks successfully processed end-to-end",
+    ["worker_id"],
 )
 
 chunks_failed_total = Counter(
-    "cv_chunks_failed_total", "Number of video chunks that failed during processing", ["worker_id", "reason"]
+    "cv_chunks_failed_total",
+    "Number of video chunks that failed during processing",
+    ["worker_id", "reason"],
 )
 
-# [Q7] Latency Histogram
 cv_chunk_latency_seconds = Histogram(
     "cv_chunk_processing_seconds",
     "Time spent in the CV processing step for each chunk (seconds)",
@@ -85,41 +92,21 @@ cv_chunk_latency_seconds = Histogram(
 )
 
 chunks_in_progress = Gauge(
-    "cv_chunks_in_progress", "Number of chunks currently being processed by this worker", ["worker_id"]
+    "cv_chunks_in_progress",
+    "Number of chunks currently being processed by this worker",
+    ["worker_id"],
 )
 
-# [Q2 & Q5] Count Vehicles Per Stream
-# UPDATED: Added "direction" label
 vehicle_summaries_emitted_total = Counter(
     "cv_vehicle_summaries_emitted_total",
     "Number of vehicle track summary events emitted",
-    ["worker_id", "direction"]
+    ["worker_id"],
 )
 
-# [Q6] Average Speed Data (NEW)
-vehicle_speed_sum = Counter(
-    "cv_vehicle_speed_sum",
-    "Total speed sum of all detected vehicles (for calculating avg)",
-    ["worker_id", "direction"]
-)
-vehicle_speed_count = Counter(
-    "cv_vehicle_speed_count",
-    "Total count of vehicles with valid speed (for calculating avg)",
-    ["worker_id", "direction"]
-)
-
-# [Q3] Speed Limit Violations (NEW)
-speed_violations_total = Counter(
-    "cv_speed_violations_total",
-    "Number of vehicles exceeding the 80/90 limit",
-    ["worker_id", "direction"]
-)
-
-# [Q4] Alerts
 speed_alerts_emitted_total = Counter(
     "cv_speed_alerts_emitted_total",
     "Number of speed alerts emitted",
-    ["worker_id", "direction"]
+    ["worker_id"],
 )
 
 
@@ -164,10 +151,15 @@ def build_kafka_consumer() -> KafkaConsumer:
         group_id=KAFKA_CONSUMER_GROUP,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
+        # --- PROJECT REQUIREMENTS FIX ---
+        # 1. Give the worker 15 minutes to process a SINGLE chunk
         max_poll_interval_ms=900000,
+        # 2. Force the worker to pick up ONLY ONE chunk at a time
         max_poll_records=1,
+        # 3. Keep the connection alive
         session_timeout_ms=30000,
         heartbeat_interval_ms=10000,
+        # --------------------------------
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         key_deserializer=lambda k: k.decode("utf-8") if k else None,
     )
@@ -214,13 +206,25 @@ def download_from_uri(s3, uri: str, local_path: str) -> None:
 # ----------------------------
 
 def process_video_chunk_cv(ev: ChunkEvent, video_path: str) -> list[dict]:
-    # ... (Your existing CV logic is perfect, I am keeping it exactly as is) ...
+    """
+    REAL CV PROCESSING:
+    1. Opens the video file using OpenCV.
+    2. Runs YOLOv8 tracking on frames.
+    3. Calculates speed using the Virtual Speed Gate (Lines at Y=417, Y=553).
+    4. Aggregates results into summaries.
+    """
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video file: {video_path}")
 
+    # Tracking state: {track_id: {"y": float, "timestamp": float}}
     track_last_pos = {}
+
+    # Crossing times: {track_id: {"t_A": float, "t_B": float}}
     gate_crossings = {}
+
+    # Final results: {track_id: {data...}}
     track_summaries = {}
 
     while True:
@@ -228,9 +232,11 @@ def process_video_chunk_cv(ev: ChunkEvent, video_path: str) -> list[dict]:
         if not success:
             break
 
+        # Get current time in seconds
         current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-        # Reduced resolution for CPU Speed!
-        results = model.track(frame, persist=True, conf=0.1, verbose=False, imgsz=320, device = 0)
+
+        # Run YOLO Tracking (with lower confidence to catch edge cars)
+        results = model.track(frame, persist=True, conf=0.1, verbose=False, device=0)
 
         if results[0].boxes.id is not None:
             boxes = results[0].boxes.xywh.cpu().tolist()
@@ -245,27 +251,32 @@ def process_video_chunk_cv(ev: ChunkEvent, video_path: str) -> list[dict]:
 
                 x, y, w, h = box
 
+                # --- SPEED GATE LOGIC ---
                 if track_id in track_last_pos:
                     prev_y = track_last_pos[track_id]["y"]
 
+                    # Check Line A (417) Crossing
                     if (prev_y < LINE_A <= y) or (y < LINE_A <= prev_y):
                         if track_id not in gate_crossings: gate_crossings[track_id] = {}
                         gate_crossings[track_id]["t_A"] = current_time
 
+                    # Check Line B (553) Crossing
                     if (prev_y < LINE_B <= y) or (y < LINE_B <= prev_y):
                         if track_id not in gate_crossings: gate_crossings[track_id] = {}
                         gate_crossings[track_id]["t_B"] = current_time
 
+                    # Calculate Speed if both crossed
                     if track_id in gate_crossings and "t_A" in gate_crossings[track_id] and "t_B" in gate_crossings[track_id]:
                         t1 = gate_crossings[track_id]["t_A"]
                         t2 = gate_crossings[track_id]["t_B"]
                         duration = abs(t2 - t1)
 
-                        if duration > 0.1:
+                        if duration > 0.1: # Ignore noise
                             speed_mps = GATE_DISTANCE_METERS / duration
                             speed_kmh = speed_mps * 3.6
                             direction = "inbound" if t1 < t2 else "outbound"
 
+                            # Store Result
                             track_summaries[track_id] = {
                                 "track_id": f"{ev.chunk_id}_{track_id}",
                                 "vehicle_type": class_name,
@@ -273,12 +284,15 @@ def process_video_chunk_cv(ev: ChunkEvent, video_path: str) -> list[dict]:
                                 "avg_speed_kmh": round(speed_kmh, 2),
                                 "max_speed_kmh": round(speed_kmh, 2)
                             }
+                            # Clear crossing to prevent duplicates
                             del gate_crossings[track_id]
 
+                # Update history
                 track_last_pos[track_id] = {"y": y, "timestamp": current_time}
 
     cap.release()
 
+    # Convert dictionary to list
     output_events = []
     for t_id, data in track_summaries.items():
         output_events.append({
@@ -348,44 +362,14 @@ def main() -> None:
                 for summary in summaries:
                     # 1. Send Analytics Data
                     producer.send(KAFKA_TOPIC_OUT, key=ev.chunk_id, value=summary)
+                    vehicle_summaries_emitted_total.labels(worker_id=WORKER_ID).inc()
 
-                    # --- [ASSIGNMENT METRICS UPDATE] ---
-
-                    # Q2 & Q5: Count with Direction
-                    vehicle_summaries_emitted_total.labels(
-                        worker_id=WORKER_ID,
-                        direction=summary["direction"]
-                    ).inc()
-
-                    # Q6: Speed Accumulation (for Average Speed)
-                    vehicle_speed_sum.labels(
-                        worker_id=WORKER_ID,
-                        direction=summary["direction"]
-                    ).inc(summary["max_speed_kmh"])
-
-                    vehicle_speed_count.labels(
-                        worker_id=WORKER_ID,
-                        direction=summary["direction"]
-                    ).inc()
-
-                    # Q3: Legal Speed Limits (90 car, 80 truck)
-                    limit = 80 if summary["vehicle_type"] == "truck" else 90
-                    if summary["max_speed_kmh"] > limit:
-                        speed_violations_total.labels(
-                            worker_id=WORKER_ID,
-                            direction=summary["direction"]
-                        ).inc()
-
-                    # 2. Send Alert if > 130 km/h (Q4)
+                    # 2. Send Alert if Speeding
                     if float(summary["max_speed_kmh"]) > SPEED_ALERT_THRESHOLD_KMH:
                         print(f"[{WORKER_ID}] 🚨 ALERT! Vehicle {summary['track_id']} doing {summary['max_speed_kmh']} km/h")
                         alert = build_alert_event(summary)
                         producer.send(KAFKA_TOPIC_ALERTS, key=ev.chunk_id, value=alert)
-
-                        speed_alerts_emitted_total.labels(
-                            worker_id=WORKER_ID,
-                            direction=summary["direction"]
-                        ).inc()
+                        speed_alerts_emitted_total.labels(worker_id=WORKER_ID).inc()
 
                 producer.flush()
 

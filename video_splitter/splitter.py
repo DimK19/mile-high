@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
+FFMPEG_BIN = r"C:\Users\KYRIAKOS\Downloads\ffmpeg-6.1-essentials_build\bin\ffmpeg.exe"
+FFPROBE_BIN = r"C:\Users\KYRIAKOS\Downloads\ffmpeg-6.1-essentials_build\bin\ffprobe.exe"
+
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio12345")
@@ -33,7 +36,7 @@ def s3_client():
 
 def ffprobe_duration_seconds(video_path: str) -> float:
     cmd = [
-        "ffprobe", "-v", "error",
+        FFPROBE_BIN, "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         video_path
@@ -46,7 +49,7 @@ def split_video(input_path: str, out_dir: str, chunk_seconds: int) -> list[str]:
     # Creates out_dir/chunk_000.mp4, chunk_001.mp4, ...
     out_pattern = os.path.join(out_dir, "chunk_%03d.mp4")
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG_BIN, "-y",
         "-i", input_path,
         "-c", "copy",
         "-f", "segment",
@@ -78,18 +81,19 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", required=True, help="Path to input .mp4")
     p.add_argument("--chunk-seconds", type=int, default=120)
-    p.add_argument("--out-dir", default="splitter/out")
+    p.add_argument("--out-dir", default="splitter\\out")
     args = p.parse_args()
 
     source_video_id = str(uuid.uuid4())
-    duration = ffprobe_duration_seconds(args.input)
-    chunks = split_video(args.input, args.out_dir, args.chunk_seconds)
+    videoPath = f'C:\\FORMAT LAP HP\\jim\\CS\\DISTRIB\\dsp\\data\\{args.input}'
+    duration = ffprobe_duration_seconds(videoPath)
+    chunks = split_video(videoPath, args.out_dir, args.chunk_seconds)
 
     prod = kafka_producer()
 
     for idx, chunk_path in enumerate(chunks):
         chunk_id = str(uuid.uuid4())
-        object_key = f"{source_video_id}/chunk_{idx:03d}.mp4"
+        object_key = f"{source_video_id}\\chunk_{idx:03d}.mp4"
         uri = upload_file_minio(chunk_path, object_key)
 
         start_sec = idx * args.chunk_seconds
